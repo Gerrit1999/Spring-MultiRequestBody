@@ -1,12 +1,14 @@
 package io.github.chujianyun.bean;
 
-import com.alibaba.fastjson.JSON;
-import com.alibaba.fastjson.JSONException;
-import com.alibaba.fastjson.JSONObject;
+import cn.hutool.core.io.IoUtil;
+import cn.hutool.core.util.ClassUtil;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.chujianyun.annotation.MultiRequestBody;
-import org.apache.commons.io.IOUtils;
-import org.apache.commons.lang3.StringUtils;
 import org.springframework.core.MethodParameter;
+import org.springframework.util.Assert;
+import org.springframework.util.StringUtils;
 import org.springframework.validation.BindingResult;
 import org.springframework.validation.Errors;
 import org.springframework.validation.annotation.ValidationAnnotationUtils;
@@ -18,25 +20,25 @@ import org.springframework.web.method.support.HandlerMethodArgumentResolver;
 import org.springframework.web.method.support.ModelAndViewContainer;
 
 import javax.servlet.http.HttpServletRequest;
+import java.io.BufferedReader;
 import java.io.IOException;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
-import java.util.HashSet;
-import java.util.Set;
+import java.util.Map;
 
 /**
- * MultiRequestBody解析器
- * 解决的问题：
- * 1、单个字符串等包装类型都要写一个对象才可以用@RequestBody接收；
- * 2、多个对象需要封装到一个对象里才可以用@RequestBody接收。
- * 主要优势：
- * 1、支持通过注解的value指定JSON的key来解析对象。
- * 2、支持通过注解无value，直接根据参数名来解析对象
- * 3、支持基本类型的注入
- * 4、支持GET和其他请求方式注入
- * 5、支持通过注解无value且参数名不匹配JSON串key时，根据属性解析对象。
- * 6、支持多余属性(不解析、不报错)、支持参数“共用”（不指定value时，参数名不为JSON串的key）
- * 7、支持当value和属性名找不到匹配的key时，对象是否匹配所有属性。
+ * MultiRequestBody解析器<br>
+ * 解决的问题：<br>
+ * 1、单个字符串等包装类型都要写一个对象才可以用@RequestBody接收<br>
+ * 2、多个对象需要封装到一个对象里才可以用@RequestBody接收<br>
+ * 主要优势：<br>
+ * 1、支持通过注解的value指定Json的key来解析对象<br>
+ * 2、支持通过注解无value，直接根据参数名来解析对象<br>
+ * 3、支持基本类型的注入<br>
+ * 4、支持GET和其他请求方式注入<br>
+ * 5、支持通过注解无value且参数名不匹配Json串key时，根据属性解析对象<br>
+ * 6、支持多余属性(不解析、不报错)、支持参数“共用”（不指定value时，参数名不为Json串的key）<br>
+ * 7、支持当value和属性名找不到匹配的key时，对象是否匹配所有属性<br>
  *
  * @author Wangyang Liu  QQ: 605283073
  * @date 2018/08/27
@@ -44,6 +46,10 @@ import java.util.Set;
 public class MultiRequestBodyArgumentResolver implements HandlerMethodArgumentResolver {
 
     private static final String JSON_BODY_ATTRIBUTE = "JSON_REQUEST_BODY";
+
+    private static final String ILLEGAL_ARGUMENT_MESSAGE_TEMPLATE = "required param %s is not present";
+
+    private static final String NOT_NULL_MESSAGE_TEMPLATE = "%s must not be null";
 
     /**
      * 设置支持的方法参数类型
@@ -58,18 +64,19 @@ public class MultiRequestBodyArgumentResolver implements HandlerMethodArgumentRe
     }
 
     /**
-     * 参数解析，利用fastjson
-     * 注意：非基本类型返回null会报空指针异常，要通过反射或者JSON工具类创建一个空对象
+     * 参数解析
+     * 注意：非基本类型返回null会报空指针异常，要通过反射或者Json工具类创建一个空对象
      */
     @Override
     public Object resolveArgument(MethodParameter parameter, ModelAndViewContainer mavContainer, NativeWebRequest webRequest, WebDataBinderFactory binderFactory) throws Exception {
         Object arg = resolveArgument(webRequest, parameter);
         String name = parameter.getParameterName();
+        Assert.notNull(name, String.format(NOT_NULL_MESSAGE_TEMPLATE, "parameterName"));
         if (binderFactory != null) {
             WebDataBinder binder = binderFactory.createBinder(webRequest, arg, name);
             if (arg != null) {
-                validateIfApplicable(binder, parameter);
-                if (binder.getBindingResult().hasErrors() && isBindExceptionRequired(binder, parameter)) {
+                this.validateIfApplicable(binder, parameter);
+                if (binder.getBindingResult().hasErrors() && this.isBindExceptionRequired(binder, parameter)) {
                     throw new MethodArgumentNotValidException(parameter, binder.getBindingResult());
                 }
             }
@@ -80,185 +87,114 @@ public class MultiRequestBodyArgumentResolver implements HandlerMethodArgumentRe
         return arg;
     }
 
-    private Object resolveArgument(NativeWebRequest webRequest, MethodParameter parameter) throws IllegalAccessException {
-        String jsonBody = getRequestBody(webRequest);
-        JSONObject jsonObject = JSON.parseObject(jsonBody);
+    private Object resolveArgument(NativeWebRequest webRequest, MethodParameter parameter) throws IllegalAccessException, JsonProcessingException {
+        ObjectMapper om = new ObjectMapper();
+        String jsonBody = this.getRequestBody(webRequest);
+        JsonNode jsonNode = om.readTree(jsonBody);
         // 根据@MultiRequestBody注解value作为json解析的key
-        MultiRequestBody parameterAnnotation = parameter.getParameterAnnotation(MultiRequestBody.class);
-        // 注解的value是JSON的key
-        String key = parameterAnnotation.value();
-        Object value;
-        // 如果@MultiRequestBody注解没有设置value，则取参数名FrameworkServlet作为json解析的key
-        if (StringUtils.isNotEmpty(key)) {
-            value = jsonObject.get(key);
-            // 如果设置了value但是解析不到，报错
-            if (value == null && parameterAnnotation.required()) {
-                throw new IllegalArgumentException(String.format("required param %s is not present", key));
+        MultiRequestBody multiRequestBody = parameter.getParameterAnnotation(MultiRequestBody.class);
+        // 注解的value是Json的key
+        Assert.notNull(multiRequestBody, String.format(NOT_NULL_MESSAGE_TEMPLATE, MultiRequestBody.class.getSimpleName()));
+        String key = multiRequestBody.value();
+        JsonNode value;
+        if (StringUtils.hasLength(key)) {
+            // 如果设置了key但是解析不到，报错
+            if (!jsonNode.has(key) && multiRequestBody.required()) {
+                throw new IllegalArgumentException(String.format(ILLEGAL_ARGUMENT_MESSAGE_TEMPLATE, key));
             }
         } else {
-            // 注解为设置value则用参数名当做json的key
+            // 如果注解没有设置key，则取参数名作为Json解析的key
             key = parameter.getParameterName();
-            value = jsonObject.get(key);
         }
 
-        // 获取的注解后的类型 Long
+        // 获取参数类型
         Class<?> parameterType = parameter.getParameterType();
-        // 通过注解的value或者参数名解析，能拿到value进行解析
+
+        // 获取参数值
+        value = jsonNode.get(key);
+
+        // 能拿到值，进行解析
         if (value != null) {
-            // 基本类型
-            if (parameterType.isPrimitive()) {
-                return parsePrimitive(parameterType.getName(), value);
-            }
-            // 基本类型包装类
-            if (isBasicDataTypes(parameterType)) {
-                return parseBasicTypeWrapper(parameterType, value);
+            if (ClassUtil.isBasicType(parameterType)) {
+                // 基本类型及包装类
+                return this.parseBasicType(parameterType, value);
+            } else if (String.class.equals(parameterType)) {
                 // 字符串类型
-            } else if (parameterType == String.class) {
-                return value.toString();
+                return value.asText();
             }
             // 其他复杂对象
-            return JSON.parseObject(value.toString(), parameterType);
+            return om.readValue(value.toString(), parameterType);
         }
 
-        // 解析不到则将整个json串解析为当前参数类型
-        if (isBasicDataTypes(parameterType)) {
-            if (parameterAnnotation.required()) {
-                throw new IllegalArgumentException(String.format("required param %s is not present", key));
+        if (ClassUtil.isBasicType(parameterType) ||
+                Iterable.class.isAssignableFrom(parameterType) ||
+                !multiRequestBody.parseAllFields()) {
+            // 为基本类型、包装类、可迭代集合、不允许解析所有字段
+            // 是基本类型或必要参数报错，否则返回null
+            if (parameterType.isPrimitive() || multiRequestBody.required()) {
+                throw new IllegalArgumentException(String.format(ILLEGAL_ARGUMENT_MESSAGE_TEMPLATE, key));
             } else {
                 return null;
             }
-        }
-
-        // 非基本类型，不允许解析所有字段，必备参数则报错，非必备参数则返回null
-        if (!parameterAnnotation.parseAllFields()) {
-            // 如果是必传参数抛异常
-            if (parameterAnnotation.required()) {
-                throw new IllegalArgumentException(String.format("required param %s is not present", key));
-            }
-            // 否则返回null
-            return null;
-        }
-        // 非基本类型，允许解析，将外层属性解析
-        Object result;
-        try {
-            result = JSON.parseObject(jsonObject.toString(), parameterType);
-        } catch (JSONException jsonException) {
-            // TODO 异常处理返回null是否合理？
-            result = null;
-        }
-
-        // 如果非必要参数直接返回，否则如果没有一个属性有值则报错
-        if (parameterAnnotation.required()) {
-            boolean haveValue = false;
-            Field[] declaredFields = parameterType.getDeclaredFields();
-            for (Field field : declaredFields) {
-                field.setAccessible(true);
-                if (field.get(result) != null) {
-                    haveValue = true;
-                    break;
+        } else {
+            Object result = om.readValue(jsonBody, parameterType);
+            // 如果是非必要参数或Map，直接返回，否则如果所有属性都为null则报错
+            if (multiRequestBody.required() && !Map.class.isAssignableFrom(parameterType)) {
+                boolean haveValue = false;
+                Field[] declaredFields = parameterType.getDeclaredFields();
+                for (Field field : declaredFields) {
+                    field.setAccessible(true);
+                    if (field.get(result) != null) {
+                        haveValue = true;
+                        break;
+                    }
+                }
+                if (!haveValue) {
+                    throw new IllegalArgumentException(String.format(ILLEGAL_ARGUMENT_MESSAGE_TEMPLATE, key));
                 }
             }
-            if (!haveValue) {
-                throw new IllegalArgumentException(String.format("required param %s is not present", key));
-            }
+            return result;
         }
-        return result;
     }
 
     /**
-     * 基本类型解析
+     * 基本类型及包装类解析
      */
-    private Object parsePrimitive(String parameterTypeName, Object value) {
-        final String booleanTypeName = "boolean";
-        if (booleanTypeName.equals(parameterTypeName)) {
-            return Boolean.valueOf(value.toString());
-        }
-        final String intTypeName = "int";
-        if (intTypeName.equals(parameterTypeName)) {
-            return Integer.valueOf(value.toString());
-        }
-        final String charTypeName = "char";
-        if (charTypeName.equals(parameterTypeName)) {
-            return value.toString().charAt(0);
-        }
-        final String shortTypeName = "short";
-        if (shortTypeName.equals(parameterTypeName)) {
-            return Short.valueOf(value.toString());
-        }
-        final String longTypeName = "long";
-        if (longTypeName.equals(parameterTypeName)) {
-            return Long.valueOf(value.toString());
-        }
-        final String floatTypeName = "float";
-        if (floatTypeName.equals(parameterTypeName)) {
-            return Float.valueOf(value.toString());
-        }
-        final String doubleTypeName = "double";
-        if (doubleTypeName.equals(parameterTypeName)) {
-            return Double.valueOf(value.toString());
-        }
-        final String byteTypeName = "byte";
-        if (byteTypeName.equals(parameterTypeName)) {
-            return Byte.valueOf(value.toString());
+    private Object parseBasicType(Class<?> type, JsonNode value) {
+        if (int.class.equals(type) || Integer.class.equals(type)) {
+            return value.intValue();
+        } else if (short.class.equals(type) || Short.class.equals(type)) {
+            return value.shortValue();
+        } else if (long.class.equals(type) || Long.class.equals(type)) {
+            return value.longValue();
+        } else if (float.class.equals(type) || Float.class.equals(type)) {
+            return value.floatValue();
+        } else if (double.class.equals(type) || Double.class.equals(type)) {
+            return value.doubleValue();
+        } else if (byte.class.equals(type) || Byte.class.equals(type)) {
+            return ((byte) value.intValue());
+        } else if (boolean.class.equals(type) || Boolean.class.equals(type)) {
+            return value.asBoolean();
+        } else if (char.class.equals(type) || Character.class.equals(type)) {
+            String s = value.asText();
+            return StringUtils.hasLength(s) ? s.charAt(0) : null;
         }
         return null;
     }
 
     /**
-     * 基本类型包装类解析
-     */
-    private Object parseBasicTypeWrapper(Class<?> parameterType, Object value) {
-        if (Number.class.isAssignableFrom(parameterType)) {
-            Number number = (Number) value;
-            if (parameterType == Integer.class) {
-                return number.intValue();
-            } else if (parameterType == Short.class) {
-                return number.shortValue();
-            } else if (parameterType == Long.class) {
-                return number.longValue();
-            } else if (parameterType == Float.class) {
-                return number.floatValue();
-            } else if (parameterType == Double.class) {
-                return number.doubleValue();
-            } else if (parameterType == Byte.class) {
-                return number.byteValue();
-            }
-        } else if (parameterType == Boolean.class) {
-            return value.toString();
-        } else if (parameterType == Character.class) {
-            return value.toString().charAt(0);
-        }
-        return null;
-    }
-
-    /**
-     * 判断是否为基本数据类型包装类
-     */
-    private boolean isBasicDataTypes(Class clazz) {
-        Set<Class> classSet = new HashSet<>();
-        classSet.add(Integer.class);
-        classSet.add(Long.class);
-        classSet.add(Short.class);
-        classSet.add(Float.class);
-        classSet.add(Double.class);
-        classSet.add(Boolean.class);
-        classSet.add(Byte.class);
-        classSet.add(Character.class);
-        return classSet.contains(clazz);
-    }
-
-    /**
-     * 获取请求体JSON字符串
+     * 获取请求体Json字符串
      */
     private String getRequestBody(NativeWebRequest webRequest) {
         HttpServletRequest servletRequest = webRequest.getNativeRequest(HttpServletRequest.class);
-
+        Assert.notNull(servletRequest, String.format(NOT_NULL_MESSAGE_TEMPLATE, HttpServletRequest.class.getSimpleName()));
         // 有就直接获取
         String jsonBody = (String) webRequest.getAttribute(JSON_BODY_ATTRIBUTE, NativeWebRequest.SCOPE_REQUEST);
         // 没有就从请求中读取
         if (jsonBody == null) {
-            try {
-                jsonBody = IOUtils.toString(servletRequest.getReader());
+            try (BufferedReader reader = servletRequest.getReader()) {
+                Assert.notNull(reader, String.format(NOT_NULL_MESSAGE_TEMPLATE, BufferedReader.class.getSimpleName()));
+                jsonBody = IoUtil.read(reader);
                 webRequest.setAttribute(JSON_BODY_ATTRIBUTE, jsonBody, NativeWebRequest.SCOPE_REQUEST);
             } catch (IOException e) {
                 throw new RuntimeException(e);
@@ -272,10 +208,11 @@ public class MultiRequestBodyArgumentResolver implements HandlerMethodArgumentRe
      * <p>The default implementation checks for {@code @javax.validation.Valid},
      * Spring's {@link org.springframework.validation.annotation.Validated},
      * and custom annotations whose name starts with "Valid".
-     * @param binder the DataBinder to be used
+     *
+     * @param binder    the DataBinder to be used
      * @param parameter the method parameter descriptor
-     * @since 4.1.5
      * @see #isBindExceptionRequired
+     * @since 4.1.5
      */
     protected void validateIfApplicable(WebDataBinder binder, MethodParameter parameter) {
         Annotation[] annotations = parameter.getParameterAnnotations();
@@ -290,7 +227,8 @@ public class MultiRequestBodyArgumentResolver implements HandlerMethodArgumentRe
 
     /**
      * Whether to raise a fatal bind exception on validation errors.
-     * @param binder the data binder used to perform data binding
+     *
+     * @param binder    the data binder used to perform data binding
      * @param parameter the method parameter descriptor
      * @return {@code true} if the next method argument is not of type {@link Errors}
      * @since 4.1.5
