@@ -94,7 +94,7 @@ public class MultiRequestBodyArgumentResolver implements HandlerMethodArgumentRe
         // 根据@MultiRequestBody注解value作为json解析的key
         MultiRequestBody multiRequestBody = parameter.getParameterAnnotation(MultiRequestBody.class);
         // 注解的value是Json的key
-        Assert.notNull(multiRequestBody, String.format(NOT_NULL_MESSAGE_TEMPLATE, MultiRequestBody.class.getSimpleName()));
+        Assert.notNull(multiRequestBody, String.format(NOT_NULL_MESSAGE_TEMPLATE, MultiRequestBody.class.getName()));
         String key = multiRequestBody.value();
         JsonNode value;
         if (StringUtils.hasLength(key)) {
@@ -187,13 +187,13 @@ public class MultiRequestBodyArgumentResolver implements HandlerMethodArgumentRe
      */
     private String getRequestBody(NativeWebRequest webRequest) {
         HttpServletRequest servletRequest = webRequest.getNativeRequest(HttpServletRequest.class);
-        Assert.notNull(servletRequest, String.format(NOT_NULL_MESSAGE_TEMPLATE, HttpServletRequest.class.getSimpleName()));
+        Assert.notNull(servletRequest, String.format(NOT_NULL_MESSAGE_TEMPLATE, HttpServletRequest.class.getName()));
         // 有就直接获取
         String jsonBody = (String) webRequest.getAttribute(JSON_BODY_ATTRIBUTE, NativeWebRequest.SCOPE_REQUEST);
         // 没有就从请求中读取
         if (jsonBody == null) {
             try (BufferedReader reader = servletRequest.getReader()) {
-                Assert.notNull(reader, String.format(NOT_NULL_MESSAGE_TEMPLATE, BufferedReader.class.getSimpleName()));
+                Assert.notNull(reader, String.format(NOT_NULL_MESSAGE_TEMPLATE, BufferedReader.class.getName()));
                 jsonBody = IoUtil.read(reader);
                 webRequest.setAttribute(JSON_BODY_ATTRIBUTE, jsonBody, NativeWebRequest.SCOPE_REQUEST);
             } catch (IOException e) {
