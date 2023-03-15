@@ -1,4 +1,4 @@
-package io.github.chujianyun.annotation;
+package io.github.gerrit.annotation;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;

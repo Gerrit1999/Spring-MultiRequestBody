@@ -1,11 +1,12 @@
-package io.github.chujianyun.bean;
+package io.github.gerrit.resolver;
 
 import cn.hutool.core.io.IoUtil;
 import cn.hutool.core.util.ClassUtil;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.github.chujianyun.annotation.MultiRequestBody;
+import io.github.gerrit.annotation.MultiRequestBody;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.core.MethodParameter;
 import org.springframework.util.Assert;
 import org.springframework.util.StringUtils;
@@ -19,7 +20,6 @@ import org.springframework.web.context.request.NativeWebRequest;
 import org.springframework.web.method.support.HandlerMethodArgumentResolver;
 import org.springframework.web.method.support.ModelAndViewContainer;
 
-import javax.servlet.http.HttpServletRequest;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.lang.annotation.Annotation;
